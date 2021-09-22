@@ -14,7 +14,7 @@ and might help you make a better decision too,
 
 - If you'd like to use Django's Admin interface to manage the different clients which consume your API.
 - If you want the token expiration to be dependent on what API client it is meant for. 
-  For example, you might want to create tokens which never expire for a Command Line client but want a shorter expiry for a JavaScript (web) client.
+  For example, you might want to create tokens which never expire for a Command Line Client but want a shorter expiry for a JavaScript (web) client.
 - If you want to limit number of tokens allowed per user.
 - If you'd like to refresh token expiry without changing token key.
 - If you or your organization are interested in Client Level Analytics such as keeping track of which user uses what client the most, etc.

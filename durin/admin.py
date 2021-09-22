@@ -24,6 +24,11 @@ class AuthTokenAdmin(admin.ModelAdmin):
     readonly_fields = ("token", "expiry", "created", "expires_in")
 
     def get_fieldsets(self, request, obj=None):
+        """
+        Hook for specifying fieldsets.
+
+        :meta private:
+        """
         if not obj:
             return [
                 (
@@ -45,9 +50,17 @@ class AuthTokenAdmin(admin.ModelAdmin):
             return super().get_fieldsets(request, obj)
 
     def has_change_permission(self, request, obj=None):
+        """
+        :meta private:
+        """
         return False
 
     def save_model(self, request, obj, form, change):
+        """
+        Given a model instance save it to the database.
+
+        :meta private:
+        """
         if not change:
             created_obj = models.AuthToken.objects.create(
                 user=obj.user, client=obj.client

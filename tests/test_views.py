@@ -7,7 +7,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.serializers import DateTimeField
 
-from durin import views
+from durin import serializers, views
 from durin.models import AuthToken, Client
 from durin.serializers import UserSerializer
 from durin.settings import durin_settings
@@ -19,19 +19,22 @@ login_url = reverse("durin_login")
 logout_url = reverse("durin_logout")
 logoutall_url = reverse("durin_logoutall")
 refresh_url = reverse("durin_refresh")
+sessions_list_uri = reverse("durin_tokensessions-list")
+apiaccess_uri = reverse("durin_apiaccess")
 
 root_url = reverse("api-root")
 cached_auth_url = reverse("cached-auth-api")
 throttled_view_url = reverse("throttled-api")
 
 new_settings = durin_settings.defaults.copy()
+new_settings["API_ACCESS_CLIENT_NAME"] = "sessionsapiaccesstestcase_client"
 
 
-class AuthViewsTestCase(CustomTestCase):
+class ViewsTestCase(CustomTestCase):
     def test_create_tokens_for_users(self):
         AuthToken.objects.all().delete()
         self.assertEqual(AuthToken.objects.count(), 0)
-        self.__create_clients()
+        self._create_clients()
 
         creds = self.creds.copy()
         creds2 = self.creds2.copy()
@@ -55,6 +58,68 @@ class AuthViewsTestCase(CustomTestCase):
         self.assertEqual(self.user2.auth_token_set.count(), Client.objects.count())
         self.assertTrue(all(t.token for t in AuthToken.objects.all()))
 
+    def test_expired_token_fails(self):
+        self.assertEqual(AuthToken.objects.count(), 0)
+        instance = AuthToken.objects.create(
+            self.user, self.authclient, delta_ttl=timedelta(seconds=0)
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % instance.token))
+        response = self.client.get(root_url)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data, {"detail": "The given token has expired."})
+
+    def test_invalid_token_length_returns_401_code(self):
+        invalid_token = "1" * (durin_settings.TOKEN_CHARACTER_LENGTH - 1)
+        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % invalid_token))
+        response = self.client.get(root_url)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data, {"detail": "Invalid token."})
+
+    def test_invalid_odd_length_token_returns_401_code(self):
+        self.assertEqual(Client.objects.count(), 1)
+        instance = AuthToken.objects.create(self.user, self.authclient)
+        odd_length_token = instance.token + "1"
+        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % odd_length_token))
+        response = self.client.get(root_url)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data, {"detail": "Invalid token."})
+
+    def test_expiry_signals(self):
+        self.signal_was_called = False
+
+        def handler(sender, **kwargs):
+            self.signal_was_called = True
+
+        token_expired.connect(handler)
+
+        instance = AuthToken.objects.create(
+            user=self.user, client=self.authclient, delta_ttl=timedelta(seconds=0)
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % instance.token))
+        self.client.get(root_url)
+
+        self.assertTrue(self.signal_was_called)
+
+    def test_invalid_auth_prefix_return_401(self):
+        instance = AuthToken.objects.create(user=self.user, client=self.authclient)
+        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % instance.token))
+        ok_response = self.client.get(root_url)
+        self.client.credentials(HTTP_AUTHORIZATION=("Baerer %s" % instance.token))
+        failed_response = self.client.get(root_url)
+        self.assertEqual(ok_response.status_code, 200)
+        self.assertEqual(failed_response.status_code, 401)
+
+    def test_invalid_auth_header_return_401(self):
+        instance = AuthToken.objects.create(user=self.user, client=self.authclient)
+        self.client.credentials(HTTP_AUTHORIZATION=("Token"))
+        resp1 = self.client.get(root_url)
+        self.assertEqual(resp1.status_code, 401)
+        self.client.credentials(HTTP_AUTHORIZATION=("Token %s typo" % instance.token))
+        resp2 = self.client.get(root_url)
+        self.assertEqual(resp2.status_code, 401)
+
+
+class AuthViewsTestCase(CustomTestCase):
     def test_login_returns_serialized_token(self):
         self.assertEqual(AuthToken.objects.count(), 0)
         response = self.client.post(
@@ -130,16 +195,6 @@ class AuthViewsTestCase(CustomTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"], "No client with that name.")
 
-    def test_expired_token_fails(self):
-        self.assertEqual(AuthToken.objects.count(), 0)
-        instance = AuthToken.objects.create(
-            self.user, self.authclient, delta_ttl=timedelta(seconds=0)
-        )
-        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % instance.token))
-        response = self.client.get(root_url)
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.data, {"detail": "The given token has expired."})
-
     def test_logout_deletes_keys(self):
         self.assertEqual(AuthToken.objects.count(), 0)
         instance = AuthToken.objects.create(user=self.user, client=self.authclient)
@@ -154,7 +209,7 @@ class AuthViewsTestCase(CustomTestCase):
 
     def test_logout_all_deletes_keys(self):
         self.assertEqual(AuthToken.objects.count(), 0)
-        self.__create_clients()
+        self._create_clients()
         for c in Client.objects.all():
             token = AuthToken.objects.create(user=self.user, client=c)
         self.assertEqual(AuthToken.objects.count(), len(self.client_names))
@@ -165,7 +220,7 @@ class AuthViewsTestCase(CustomTestCase):
 
     def test_logout_all_deletes_only_targets_keys(self):
         self.assertEqual(AuthToken.objects.count(), 0)
-        self.__create_clients()
+        self._create_clients()
         for c in Client.objects.all():
             instance = AuthToken.objects.create(user=self.user, client=c)
             AuthToken.objects.create(user=self.user2, client=c)
@@ -180,56 +235,6 @@ class AuthViewsTestCase(CustomTestCase):
             len(self.client_names),
             "tokens from other users should not be affected by logout all",
         )
-
-    def test_invalid_token_length_returns_401_code(self):
-        invalid_token = "1" * (durin_settings.TOKEN_CHARACTER_LENGTH - 1)
-        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % invalid_token))
-        response = self.client.get(root_url)
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.data, {"detail": "Invalid token."})
-
-    def test_invalid_odd_length_token_returns_401_code(self):
-        self.assertEqual(Client.objects.count(), 1)
-        instance = AuthToken.objects.create(self.user, self.authclient)
-        odd_length_token = instance.token + "1"
-        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % odd_length_token))
-        response = self.client.get(root_url)
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.data, {"detail": "Invalid token."})
-
-    def test_expiry_signals(self):
-        self.signal_was_called = False
-
-        def handler(sender, **kwargs):
-            self.signal_was_called = True
-
-        token_expired.connect(handler)
-
-        instance = AuthToken.objects.create(
-            user=self.user, client=self.authclient, delta_ttl=timedelta(seconds=0)
-        )
-        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % instance.token))
-        self.client.get(root_url)
-
-        self.assertTrue(self.signal_was_called)
-
-    def test_invalid_auth_prefix_return_401(self):
-        instance = AuthToken.objects.create(user=self.user, client=self.authclient)
-        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % instance.token))
-        ok_response = self.client.get(root_url)
-        self.client.credentials(HTTP_AUTHORIZATION=("Baerer %s" % instance.token))
-        failed_response = self.client.get(root_url)
-        self.assertEqual(ok_response.status_code, 200)
-        self.assertEqual(failed_response.status_code, 401)
-
-    def test_invalid_auth_header_return_401(self):
-        instance = AuthToken.objects.create(user=self.user, client=self.authclient)
-        self.client.credentials(HTTP_AUTHORIZATION=("Token"))
-        resp1 = self.client.get(root_url)
-        self.assertEqual(resp1.status_code, 401)
-        self.client.credentials(HTTP_AUTHORIZATION=("Token %s typo" % instance.token))
-        resp2 = self.client.get(root_url)
-        self.assertEqual(resp2.status_code, 401)
 
     def test_login_same_token_existing_client(self):
         self.assertEqual(AuthToken.objects.count(), 0)
@@ -306,12 +311,220 @@ class AuthViewsTestCase(CustomTestCase):
         self.assertNotEqual(resp.data["expiry"], instance.expiry)
         self.assertTrue(self.signal_was_called, "token_renewed signal was called.")
 
-    def __create_clients(self):
-        Client.objects.all().delete()
-        self.assertEqual(Client.objects.count(), 0)
-        for name in self.client_names:
-            Client.objects.create(name=name)
-        self.assertEqual(Client.objects.count(), len(self.client_names))
+
+@override_settings(REST_DURIN=new_settings)
+class SessionAndAPIAccessViewsTestCase(CustomTestCase):
+    def setUp(self):
+        super(SessionAndAPIAccessViewsTestCase, self).setUp()
+        # setup token and api client
+        self.token = self._create_authtoken()
+        self.client.credentials(HTTP_AUTHORIZATION=("Token %s" % self.token.token))
+        # setup apiaccess client
+        self.apiaccess_client, _ = Client.objects.get_or_create(
+            name=new_settings["API_ACCESS_CLIENT_NAME"]
+        )
+
+    # unit testcases for /sessions
+
+    def test_sessions_list_200(self):
+        # db assertions
+        self.assertEqual(
+            1,
+            AuthToken.objects.filter(user=self.user).count(),
+            msg="single instance exists",
+        )
+
+        response = self.client.get(sessions_list_uri)
+        content = response.json()
+        msg = (response, content)
+        # response assertions
+        self.assertEqual(200, response.status_code, msg=msg)
+        self.assertNotIn("token", content[0], msg="token is omitted from view")
+        self.assertNotIn("user", content[0], msg="user is omitted from view")
+
+    def test_sessions_list_exclude_apiaccess_200(self):
+        # create apiaccess token
+        _ = self._create_authtoken(client_name=new_settings["API_ACCESS_CLIENT_NAME"])
+
+        # db assertions
+        self.assertEqual(
+            2,
+            AuthToken.objects.filter(user=self.user).count(),
+            msg="two instance exists",
+        )
+
+        # 1. override settings to exclude token
+        new_settings["API_ACCESS_EXCLUDE_FROM_SESSIONS"] = False
+        with override_settings(REST_DURIN=new_settings):
+            reload(views)
+            response = self.client.get(sessions_list_uri)
+            content = response.json()
+            # response assertions
+            self.assertEqual(200, response.status_code, msg=(response, content))
+            self.assertEqual(2, len(content), msg="got 2 tokens")
+
+        # 2. override settings to include token
+        new_settings["API_ACCESS_EXCLUDE_FROM_SESSIONS"] = True
+        with override_settings(REST_DURIN=new_settings):
+            reload(views)
+            response = self.client.get(sessions_list_uri)
+            content = response.json()
+            # response assertions
+            self.assertEqual(200, response.status_code, msg=(response, content))
+            self.assertEqual(1, len(content), msg="got 1 token")
+
+        reload(views)
+
+    def test_sessions_delete_204(self):
+        newtoken = self._create_authtoken(client_name="test_sessions_delete_204")
+
+        # db assertions
+        self.assertEqual(
+            2,
+            AuthToken.objects.filter(user=self.user).count(),
+            msg="two instances exists",
+        )
+
+        # request to delete this newtoken
+        uri = reverse("durin_tokensessions-detail", args=[newtoken.pk])
+        response = self.client.delete(uri)
+
+        # response assertions
+        self.assertEqual(204, response.status_code, msg=(response,))
+        # db assertions
+        self.assertEqual(
+            1,
+            AuthToken.objects.filter(user=self.user).count(),
+            msg=(response, "2nd instance was deleted so single instance exists"),
+        )
+
+    def test_sessions_cant_delete_current_400(self):
+        # request to delete token created in `setUp`
+        uri = reverse("durin_tokensessions-detail", args=[self.token.pk])
+        response = self.client.delete(uri)
+        content = response.json()
+        msg = (response, content, "raises ValidationError")
+
+        # response assertions
+        self.assertEqual(400, response.status_code, msg=msg)
+
+    # unit testcases for /apiaccess
+
+    def test_apiaccess_get_200(self):
+        # create apiaccess token
+        apiaccesstoken = self._create_authtoken(
+            client_name=new_settings["API_ACCESS_CLIENT_NAME"]
+        )
+
+        # 1. override settings to exclude token
+        new_settings["API_ACCESS_RESPONSE_INCLUDE_TOKEN"] = False
+        with override_settings(REST_DURIN=new_settings):
+            reload(serializers)
+            reload(views)
+            response = self.client.get(apiaccess_uri)
+            content = response.json()
+            # response assertions
+            self.assertEqual(200, response.status_code, msg=(response, content))
+            self.assertNotIn("token", content, msg="token is omitted from view")
+
+        # 2. override settings to include token
+        new_settings["API_ACCESS_RESPONSE_INCLUDE_TOKEN"] = True
+        with override_settings(REST_DURIN=new_settings):
+            reload(serializers)
+            reload(views)
+            response = self.client.get(apiaccess_uri)
+            content = response.json()
+            # response assertions
+            self.assertEqual(200, response.status_code, msg=(response, content))
+            self.assertEqual(
+                apiaccesstoken.token,
+                content["token"],
+                msg="tokens from db and view must match",
+            )
+
+        reload(serializers)
+        reload(views)
+
+    def test_apiaccess_get_404(self):
+        response = self.client.get(apiaccess_uri)
+        content = response.json()
+        # response assertions
+        self.assertEqual(
+            404, response.status_code, msg="because no apiaccess token exists"
+        )
+        self.assertDictEqual({"detail": "Not found."}, content, msg="not found")
+
+    def test_apiaccess_post_201(self):
+        response = self.client.post(apiaccess_uri)
+        content = response.json()
+        msg = (response, content, "apiaccess token must be created")
+
+        # response assertions
+        self.assertEqual(201, response.status_code, msg=msg)
+
+        # assert against db value
+        newtoken = AuthToken.objects.get(
+            user=self.user, client__name=new_settings["API_ACCESS_CLIENT_NAME"]
+        )
+        self.assertEqual(
+            newtoken.token, content["token"], msg="tokens from db and view must match"
+        )
+
+    def test_apiaccess_post_already_exists_400(self):
+        response = self.client.post(apiaccess_uri)
+
+        # response assertions
+        self.assertEqual(
+            201,
+            response.status_code,
+            msg=(
+                response,
+                response.json(),
+                "In 1st request, apiaccess token must be created",
+            ),
+        )
+
+        response = self.client.post(apiaccess_uri)
+
+        # response assertions
+        self.assertEqual(
+            400,
+            response.status_code,
+            msg=(
+                response,
+                response.json(),
+                """
+                In 2nd request,
+                `ValidationError` is raised because apiaccess token already exists
+                """,
+            ),
+        )
+
+    def test_apiaccess_delete_204(self):
+        reload(views)  # otherwise fails
+        # create apiaccess token
+        apiaccesstoken = self._create_authtoken(
+            client_name=new_settings["API_ACCESS_CLIENT_NAME"]
+        )
+        # request to delete this apiaccesstoken
+        response = self.client.delete(apiaccess_uri)
+
+        # response assertions
+        self.assertEqual(204, response.status_code, msg=(response,))
+
+        with self.assertRaises(AuthToken.DoesNotExist, msg="token was deleted"):
+            AuthToken.objects.get(token=apiaccesstoken.token)
+
+    def test_apiaccess_delete_404(self):
+        # request to delete apiaccess token when it doesn't exist
+        response = self.client.delete(apiaccess_uri)
+        content = response.json()
+
+        # response assertions
+        self.assertEqual(
+            404, response.status_code, msg="because no apiaccess token exists"
+        )
+        self.assertDictEqual({"detail": "Not found."}, content, msg="not found")
 
 
 class ExampleProjectViewsTestCase(CustomTestCase):

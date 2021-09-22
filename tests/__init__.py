@@ -36,3 +36,22 @@ class CustomTestCase(APITestCase):
         }
 
         self.client_names = ["web", "mobile", "cli"]
+
+    def _create_clients(self) -> None:
+        Client.objects.all().delete()
+        self.assertEqual(Client.objects.count(), 0)
+        for name in self.client_names:
+            Client.objects.create(name=name)
+        self.assertEqual(Client.objects.count(), len(self.client_names))
+
+    def _create_authtoken(self, user=None, client_name=None) -> AuthToken:
+        if not user:
+            user = self.user
+        if not client_name:
+            client_name = "customtestcase_client"
+        client, _ = Client.objects.get_or_create(name=client_name)
+        try:
+            token = AuthToken.objects.get(user=user, client=client)
+        except AuthToken.DoesNotExist:
+            token = AuthToken.objects.create(user=user, client=client)
+        return token

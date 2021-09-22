@@ -2,6 +2,10 @@ Views (``durin.views``)
 ================================
 
 Durin provides four views that handle token management for you.
+And two additional views to allow sessions management.
+
+Auth Management Views
+###########
 
 --------------------------
 
@@ -54,7 +58,7 @@ Here's an example snippet of how you can override this behaviour::
         ### urls.py:
 
         from durin import views as durin_views
-        from yourapp.api.views import LoginView
+        from yourapp.views import LoginView
 
         urlpatterns = [
             url(r'login/', LoginView.as_view(), name='durin_login'),
@@ -91,3 +95,25 @@ LogoutAllView
 .. Note:: It is not recommended to alter the Logout views. They are designed 
           specifically for token management, and to respond to durin authentication.
           Modified forms of the class may cause unpredictable results.
+
+
+Session Management Views
+###########
+
+--------------------------
+
+TokenSessionsViewSet
+--------------------------
+
+.. autoclass:: durin.views.TokenSessionsViewSet
+   :show-inheritance:
+
+--------------------------
+
+APIAccessTokenView
+--------------------------
+
+.. autoclass:: durin.views.APIAccessTokenView
+   :show-inheritance:
+
+--------------------------

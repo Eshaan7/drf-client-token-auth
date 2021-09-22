@@ -1,17 +1,20 @@
 from datetime import datetime
 
 from django.contrib.auth.signals import user_logged_in, user_logged_out
-from rest_framework import status
+from rest_framework import mixins, status
 from rest_framework.authtoken.serializers import AuthTokenSerializer
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.reverse import reverse
 from rest_framework.serializers import DateTimeField
 from rest_framework.views import APIView
+from rest_framework.viewsets import GenericViewSet
 
-from durin.auth import TokenAuthentication
-from durin.models import AuthToken, Client
-from durin.settings import durin_settings
+from .auth import TokenAuthentication
+from .models import AuthToken, Client
+from .serializers import APIAccessTokenSerializer, TokenSessionsSerializer
+from .settings import durin_settings
 
 
 class LoginView(APIView):
@@ -205,3 +208,93 @@ class LogoutAllView(APIView):
             sender=request.user.__class__, request=request, user=request.user
         )
         return Response(None, status=status.HTTP_204_NO_CONTENT)
+
+
+class TokenSessionsViewSet(
+    mixins.ListModelMixin, mixins.DestroyModelMixin, GenericViewSet
+):
+    """Durin's TokenSessionsViewSet.\n
+    - Returns list of active sessions of authed user.
+    - Only ``list()`` and ``delete()`` operations.
+    """
+
+    authentication_classes = (TokenAuthentication,)
+    permission_classes = (IsAuthenticated,)
+    queryset = AuthToken.objects.select_related("client").all()
+    serializer_class = TokenSessionsSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # filter against authed user
+        qs = qs.filter(user=self.request.user)
+        # exclude session for the APIAccess session
+        # if `API_ACCESS_EXCLUDE_FROM_SESSIONS` setting is True
+        if durin_settings.API_ACCESS_EXCLUDE_FROM_SESSIONS:
+            qs = qs.exclude(client__name=durin_settings.API_ACCESS_CLIENT_NAME)
+        return qs
+
+    def perform_destroy(self, instance):
+        """
+        Overwrite to prevent deletion of object
+        against which current request was authed.
+        """
+        if instance.pk == self.request.auth.pk:
+            raise ValidationError(
+                "Can't delete token if the request is authed with it."
+                "Use {} instead.".format(reverse("durin_logout"))
+            )
+        instance.delete()
+
+
+class APIAccessTokenView(APIView):
+    """Durin's APIAccessTokenView.\n"""
+
+    authentication_classes = (TokenAuthentication,)
+    permission_classes = (IsAuthenticated,)
+
+    @property
+    def client_name(self) -> str:
+        client_name = getattr(durin_settings, "API_ACCESS_CLIENT_NAME", None)
+        # verify/ asssert
+        assert client_name, "setting `API_ACCESS_CLIENT_NAME` must be set to use this."
+        return client_name
+
+    def get_serializer(self, *args, **kwargs):
+        return APIAccessTokenSerializer(
+            *args,
+            **kwargs,
+            context={
+                "request": self.request,
+                "format": self.format_kwarg,
+                "view": self,
+                "client_name": self.client_name,
+            },
+        )
+
+    def get_object(self):
+        try:
+            instance = AuthToken.objects.get(
+                user__pk=self.request.user.pk,
+                client__name=self.client_name,
+            )
+        except AuthToken.DoesNotExist:
+            raise NotFound()
+
+        return instance
+
+    def get(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = self.get_serializer(data={})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        instance = self.get_object()
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

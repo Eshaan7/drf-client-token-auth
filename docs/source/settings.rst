@@ -19,6 +19,9 @@ Example ``settings.py``::
 			"TOKEN_CACHE_TIMEOUT": 60,
 			"REFRESH_TOKEN_ON_LOGIN": False,
 			"AUTHTOKEN_SELECT_RELATED_LIST": ["user"],
+			"API_ACCESS_CLIENT_NAME": None,
+			"API_ACCESS_EXCLUDE_FROM_SESSIONS": False,
+			"API_ACCESS_RESPONSE_INCLUDE_TOKEN": False,
 		}
 		#...snip...
 
@@ -101,3 +104,34 @@ Example ``settings.py``::
 
 	.. Hint:: Refer to `Django's select_related docs <https://docs.djangoproject.com/en/3.2/ref/models/querysets/#select-related>`_
 	          to see how this can boost performance by reducing number of SQL queries made.
+
+
+.. data:: API_ACCESS_CLIENT_NAME
+
+	Default: ``None``
+
+	There may be an use-case where you want to issue API keys to your users so they can call your RESTful API
+	using cURL or a custom client. 
+	
+	Set this setting to the ``name` of the specific :class:`durin.models.Client` instance to issue these API keys against.
+
+	Note: The :class:`durin.views.APIAccessTokenView` view allows management of this.
+
+.. data:: API_ACCESS_EXCLUDE_FROM_SESSIONS
+
+	Default: ``False``
+
+	If set to ``True``, the ``AuthToken`` instance for the specifc ``API_ACCESS_CLIENT_NAME``'s `Client`` instance
+	will be excluded from the overall "Sessions List" 
+	(``GET /api/sessions/``) response.
+
+	This is useful because you may want the view to list only the "browser sessions".
+
+.. data:: API_ACCESS_RESPONSE_INCLUDE_TOKEN
+
+	Default: ``False``
+
+	If set to ``False``, the ``token`` field would be omitted from the
+	:class:`durin.views.APIAccessTokenView` view's (``GET /api/apiaccess/``) response.
+
+	In case of ``POST`` request, the ``token`` field is always included despite of this setting.

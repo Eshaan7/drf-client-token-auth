@@ -10,13 +10,11 @@ Other submodules
 
 .. automodule:: durin.admin
    :members:
-   :undoc-members:
-   :show-inheritance:
+   :no-undoc-members:
 
 ``durin.serializers`` module
 ------------------------------
 
 .. automodule:: durin.serializers
    :members:
-   :undoc-members:
-   :show-inheritance:
+   :no-undoc-members:

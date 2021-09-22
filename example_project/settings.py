@@ -26,6 +26,11 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {"user_per_client": "2/m"},
 }
 
+TEST_CLIENT_NAME = "web-browser-client-test"
+REST_DURIN = {
+    "API_ACCESS_CLIENT_NAME": TEST_CLIENT_NAME,
+}
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

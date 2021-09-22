@@ -24,10 +24,16 @@ The views would then accessible as:
 - ``/api/auth/refresh`` - ``RefreshView``
 - ``/api/auth/logout`` -> ``LogoutView``
 - ``/api/auth/logoutall`` -> ``LogoutAllView``
+- ``/api/auth/sessions`` -> ``TokenSessionsViewSet``
+- ``/api/auth/apiaccess`` -> ``APIAccessTokenView``
 
 they can also be looked up by name::
+
+    from django.urls import reverse
 
     reverse('durin_login')
     reverse('durin_logout')
     reverse('durin_refresh')
     reverse('durin_logoutall')
+    reverse('durin_tokensessions-list')
+    reverse('durin_apiaccess')
